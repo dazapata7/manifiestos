@@ -7,8 +7,9 @@ from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from datetime import datetime
+from reportlab.platypus.flowables import KeepTogether
 
 # Configuración de la página
 st.set_page_config(
@@ -96,8 +97,16 @@ if uploaded_file is not None:
                     fontSize=10, textColor=colors.HexColor('#666666'), 
                     spaceAfter=12, alignment=TA_CENTER, fontName='Helvetica')
                 
-                col_widths = [0.35*inch, 1.05*inch, 1.5*inch, 1.1*inch, 
-                             0.9*inch, 1.9*inch, 2.2*inch]
+                # ANCHOS DE COLUMNAS OPTIMIZADOS (corregidos)
+                col_widths = [
+                    0.4*inch,    # # (más estrecho)
+                    0.9*inch,    # Guía (más estrecho)
+                    1.6*inch,    # Cliente (más ancho)
+                    1.0*inch,    # Ciudad
+                    1.0*inch,    # Estado
+                    1.8*inch,    # Dirección
+                    2.2*inch     # Producto (más ancho para múltiples líneas)
+                ]
                 
                 # Calcular páginas
                 total_ordenes = len(df)
@@ -125,10 +134,22 @@ if uploaded_file is not None:
                     
                     for idx, row in chunk.iterrows():
                         guia = str(row['Guía de Envío']) if pd.notna(row['Guía de Envío']) else 'N/A'
-                        cliente = str(row['Cliente'])[:22] if pd.notna(row['Cliente']) else 'N/A'
-                        ciudad = str(row['Ciudad'])[:15] if pd.notna(row['Ciudad']) else 'N/A'
-                        estado = str(row['Estado'])[:12] if pd.notna(row['Estado']) else 'N/A'
-                        producto = str(row['Productos'])[:35] if pd.notna(row['Productos']) else 'N/A'
+                        cliente = str(row['Cliente'])[:25] if pd.notna(row['Cliente']) else 'N/A'
+                        ciudad = str(row['Ciudad'])[:12] if pd.notna(row['Ciudad']) else 'N/A'
+                        estado = str(row['Estado'])[:10] if pd.notna(row['Estado']) else 'N/A'
+                        
+                        # Producto con ajuste de líneas automático
+                        if pd.notna(row['Productos']):
+                            producto_texto = str(row['Productos'])
+                            # Crear Paragraph que permite múltiples líneas
+                            producto_para = Paragraph(producto_texto, 
+                                ParagraphStyle('Producto', parent=styles['Normal'], 
+                                fontSize=7, alignment=TA_LEFT, fontName='Helvetica',
+                                wordWrap='CJK'))  # Permite wrap de texto
+                        else:
+                            producto_para = Paragraph('N/A', 
+                                ParagraphStyle('Producto', parent=styles['Normal'], 
+                                fontSize=7, alignment=TA_LEFT, fontName='Helvetica'))
                         
                         # Dirección
                         direccion_parts = []
@@ -136,37 +157,57 @@ if uploaded_file is not None:
                             direccion_parts.append(str(row['Calle']))
                         if pd.notna(row['Número']):
                             direccion_parts.append(str(row['Número']))
-                        direccion = ' '.join(direccion_parts)[:28] if direccion_parts else 'N/A'
+                        direccion = ' '.join(direccion_parts)[:30] if direccion_parts else 'N/A'
+                        
+                        # NUMERACIÓN CORREGIDA (usa el índice global)
+                        numero_orden = start + (idx - chunk.index[0]) + 1
                         
                         table_data.append([
-                            str(start + idx + 1),
+                            str(numero_orden),  # Numeración correcta
                             guia,
                             cliente,
                             ciudad,
                             estado,
                             direccion,
-                            producto
+                            producto_para  # Usa Paragraph para múltiples líneas
                         ])
                     
-                    # Crear tabla
+                    # Crear tabla con estilos optimizados
                     guias_table = Table(table_data, colWidths=col_widths, repeatRows=1)
                     guias_table.setStyle(TableStyle([
                         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
                         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
                         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                        ('FONTSIZE', (0, 0), (-1, 0), 8),
+                        ('FONTSIZE', (0, 0), (-1, 0), 9),
                         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                        ('TOPPADDING', (0, 0), (-1, 0), 8),
+                        
+                        # Filas de datos
                         ('BACKGROUND', (0, 1), (-1, -1), colors.white),
                         ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-                        ('ALIGN', (0, 1), (0, -1), 'CENTER'),
-                        ('ALIGN', (1, 1), (-1, -1), 'LEFT'),
+                        ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # Columna #
+                        ('ALIGN', (1, 1), (1, -1), 'CENTER'),  # Columna Guía
+                        ('ALIGN', (2, 1), (5, -1), 'LEFT'),    # Cliente, Ciudad, Estado, Dirección
                         ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                        ('FONTSIZE', (0, 1), (-1, -1), 7.5),
+                        ('FONTSIZE', (0, 1), (5, -1), 8),      # Tamaño para todas excepto Producto
+                        ('FONTSIZE', (6, 1), (6, -1), 7),      # Producto más pequeño
+                        ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+                        ('TOPPADDING', (0, 1), (-1, -1), 6),
+                        
+                        # Bordes
                         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')])
+                        ('LINEBELOW', (0, 0), (-1, 0), 2, colors.HexColor('#2c3e50')),
+                        
+                        # Filas alternadas
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
+                        
+                        # Ajuste de altura automática para celdas con mucho texto
+                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
                     ]))
-                    elements.append(guias_table)
+                    
+                    # Asegurar que la tabla completa se mantenga junta
+                    elements.append(KeepTogether(guias_table))
                 
                 # Página de firmas
                 elements.append(PageBreak())
