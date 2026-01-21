@@ -6,10 +6,11 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.units import inch, cm
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 from datetime import datetime
-from reportlab.platypus.flowables import KeepTogether
+from reportlab.pdfgen import canvas
+from reportlab.platypus.flowables import KeepInFrame
 
 # Configuración de la página
 st.set_page_config(
@@ -81,141 +82,212 @@ if uploaded_file is not None:
             with st.spinner("Generando PDF..."):
                 # Crear PDF en memoria
                 buffer = BytesIO()
-                doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), 
-                                       rightMargin=20, leftMargin=20,
-                                       topMargin=30, bottomMargin=30)
+                
+                # Tamaño de página landscape optimizado
+                doc = SimpleDocTemplate(
+                    buffer, 
+                    pagesize=landscape(letter),
+                    rightMargin=0.5*cm,
+                    leftMargin=0.5*cm,
+                    topMargin=1.5*cm,
+                    bottomMargin=1.0*cm
+                )
                 
                 elements = []
                 styles = getSampleStyleSheet()
                 
-                # Estilos
-                title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], 
-                    fontSize=16, textColor=colors.HexColor('#1a1a1a'), 
-                    spaceAfter=8, alignment=TA_CENTER, fontName='Helvetica-Bold')
+                # Estilos personalizados
+                title_style = ParagraphStyle(
+                    'CustomTitle', 
+                    parent=styles['Heading1'],
+                    fontSize=14,
+                    textColor=colors.HexColor('#1a1a1a'),
+                    spaceAfter=6,
+                    alignment=TA_CENTER,
+                    fontName='Helvetica-Bold'
+                )
                 
-                subtitle_style = ParagraphStyle('CustomSubtitle', parent=styles['Normal'], 
-                    fontSize=10, textColor=colors.HexColor('#666666'), 
-                    spaceAfter=12, alignment=TA_CENTER, fontName='Helvetica')
+                subtitle_style = ParagraphStyle(
+                    'CustomSubtitle', 
+                    parent=styles['Normal'],
+                    fontSize=9,
+                    textColor=colors.HexColor('#666666'),
+                    spaceAfter=10,
+                    alignment=TA_CENTER,
+                    fontName='Helvetica'
+                )
                 
-                # ANCHOS DE COLUMNAS OPTIMIZADOS (corregidos)
+                # Estilo para texto en celdas (más compacto)
+                cell_style = ParagraphStyle(
+                    'CellStyle',
+                    parent=styles['Normal'],
+                    fontSize=7.5,
+                    alignment=TA_LEFT,
+                    fontName='Helvetica',
+                    leading=9  # Espaciado entre líneas reducido
+                )
+                
+                # Estilo para números
+                number_style = ParagraphStyle(
+                    'NumberStyle',
+                    parent=styles['Normal'],
+                    fontSize=8,
+                    alignment=TA_CENTER,
+                    fontName='Helvetica',
+                    leading=9
+                )
+                
+                # ANCHOS DE COLUMNAS OPTIMIZADOS (en cm para precisión)
                 col_widths = [
-                    0.4*inch,    # # (más estrecho)
-                    0.9*inch,    # Guía (más estrecho)
-                    1.6*inch,    # Cliente (más ancho)
-                    1.0*inch,    # Ciudad
-                    1.0*inch,    # Estado
-                    1.8*inch,    # Dirección
-                    2.2*inch     # Producto (más ancho para múltiples líneas)
+                    0.6*cm,    # # (muy estrecho)
+                    1.8*cm,    # Guía
+                    3.5*cm,    # Cliente
+                    2.0*cm,    # Ciudad
+                    2.0*cm,    # Estado
+                    3.5*cm,    # Dirección
+                    4.0*cm     # Producto
                 ]
                 
-                # Calcular páginas
+                # Calcular páginas necesarias (18 órdenes por página)
                 total_ordenes = len(df)
                 ordenes_por_pagina = 18
                 num_paginas = (total_ordenes + ordenes_por_pagina - 1) // ordenes_por_pagina
                 
-                # Generar páginas
-                for i in range(num_paginas):
-                    start = i * ordenes_por_pagina
-                    end = min((i + 1) * ordenes_por_pagina, total_ordenes)
+                # Generar cada página
+                for page_num in range(num_paginas):
+                    start_idx = page_num * ordenes_por_pagina
+                    end_idx = min((page_num + 1) * ordenes_por_pagina, total_ordenes)
                     
-                    if i > 0:
+                    if page_num > 0:
                         elements.append(PageBreak())
                     
-                    # Encabezado
+                    # ENCABEZADO DE PÁGINA
                     elements.append(Paragraph("MANIFIESTO DE ENTREGA", title_style))
+                    
                     if num_paginas > 1:
-                        elements.append(Paragraph(f"Fecha: {FECHA_MANIFIESTO} | Total: {total_ordenes} órdenes | Página {i+1} de {num_paginas}", subtitle_style))
+                        elements.append(Paragraph(
+                            f"Fecha: {FECHA_MANIFIESTO} | Total: {total_ordenes} órdenes | Página {page_num + 1} de {num_paginas}",
+                            subtitle_style
+                        ))
                     else:
-                        elements.append(Paragraph(f"Fecha: {FECHA_MANIFIESTO} | Total: {total_ordenes} órdenes", subtitle_style))
+                        elements.append(Paragraph(
+                            f"Fecha: {FECHA_MANIFIESTO} | Total: {total_ordenes} órdenes",
+                            subtitle_style
+                        ))
                     
-                    # Datos de la tabla
-                    chunk = df.iloc[start:end]
-                    table_data = [['#', 'Guía', 'Cliente', 'Ciudad', 'Estado', 'Dirección', 'Producto']]
+                    # Espacio entre encabezado y tabla
+                    elements.append(Spacer(1, 0.2*cm))
                     
+                    # Obtener datos para esta página
+                    chunk = df.iloc[start_idx:end_idx].copy()
+                    
+                    # Preparar datos de la tabla
+                    table_data = []
+                    
+                    # ENCABEZADOS DE TABLA
+                    header_row = [
+                        Paragraph('#', cell_style),
+                        Paragraph('Guía', cell_style),
+                        Paragraph('Cliente', cell_style),
+                        Paragraph('Ciudad', cell_style),
+                        Paragraph('Estado', cell_style),
+                        Paragraph('Dirección', cell_style),
+                        Paragraph('Producto', cell_style)
+                    ]
+                    table_data.append(header_row)
+                    
+                    # DATOS DE LAS ÓRDENES
                     for idx, row in chunk.iterrows():
-                        guia = str(row['Guía de Envío']) if pd.notna(row['Guía de Envío']) else 'N/A'
+                        # Preparar cada campo con límites de caracteres
+                        guia = str(row['Guía de Envío'])[:10] if pd.notna(row['Guía de Envío']) else 'N/A'
                         cliente = str(row['Cliente'])[:25] if pd.notna(row['Cliente']) else 'N/A'
-                        ciudad = str(row['Ciudad'])[:12] if pd.notna(row['Ciudad']) else 'N/A'
-                        estado = str(row['Estado'])[:10] if pd.notna(row['Estado']) else 'N/A'
-                        
-                        # Producto con ajuste de líneas automático
-                        if pd.notna(row['Productos']):
-                            producto_texto = str(row['Productos'])
-                            # Crear Paragraph que permite múltiples líneas
-                            producto_para = Paragraph(producto_texto, 
-                                ParagraphStyle('Producto', parent=styles['Normal'], 
-                                fontSize=7, alignment=TA_LEFT, fontName='Helvetica',
-                                wordWrap='CJK'))  # Permite wrap de texto
-                        else:
-                            producto_para = Paragraph('N/A', 
-                                ParagraphStyle('Producto', parent=styles['Normal'], 
-                                fontSize=7, alignment=TA_LEFT, fontName='Helvetica'))
+                        ciudad = str(row['Ciudad'])[:15] if pd.notna(row['Ciudad']) else 'N/A'
+                        estado = str(row['Estado'])[:12] if pd.notna(row['Estado']) else 'N/A'
                         
                         # Dirección
                         direccion_parts = []
                         if pd.notna(row['Calle']):
                             direccion_parts.append(str(row['Calle']))
                         if pd.notna(row['Número']):
-                            direccion_parts.append(str(row['Número']))
-                        direccion = ' '.join(direccion_parts)[:30] if direccion_parts else 'N/A'
+                            direccion_parts.append(' ' + str(row['Número']))
+                        direccion = ' '.join(direccion_parts)[:35] if direccion_parts else 'N/A'
                         
-                        # NUMERACIÓN CORREGIDA (usa el índice global)
-                        numero_orden = start + (idx - chunk.index[0]) + 1
+                        # Producto (con wrap automático)
+                        if pd.notna(row['Productos']):
+                            producto_text = str(row['Productos'])
+                            # Limitar longitud pero permitir wrap
+                            if len(producto_text) > 50:
+                                producto_text = producto_text[:47] + '...'
+                        else:
+                            producto_text = 'N/A'
                         
-                        table_data.append([
-                            str(numero_orden),  # Numeración correcta
-                            guia,
-                            cliente,
-                            ciudad,
-                            estado,
-                            direccion,
-                            producto_para  # Usa Paragraph para múltiples líneas
-                        ])
+                        # Número de orden CORREGIDO (continuo entre páginas)
+                        orden_num = start_idx + (idx - chunk.index[0]) + 1
+                        
+                        # Crear fila con Paragraphs para mejor control
+                        row_data = [
+                            Paragraph(str(orden_num), number_style),
+                            Paragraph(guia, number_style),
+                            Paragraph(cliente, cell_style),
+                            Paragraph(ciudad, cell_style),
+                            Paragraph(estado, cell_style),
+                            Paragraph(direccion, cell_style),
+                            Paragraph(producto_text, cell_style)
+                        ]
+                        
+                        table_data.append(row_data)
                     
-                    # Crear tabla con estilos optimizados
-                    guias_table = Table(table_data, colWidths=col_widths, repeatRows=1)
-                    guias_table.setStyle(TableStyle([
+                    # Crear tabla con alturas de fila reducidas
+                    tabla = Table(
+                        table_data, 
+                        colWidths=col_widths,
+                        repeatRows=1,  # Repetir encabezados en cada página
+                        rowHeights=0.5*cm  # Altura fija y reducida para todas las filas
+                    )
+                    
+                    # APLICAR ESTILOS A LA TABLA
+                    estilo_tabla = TableStyle([
+                        # ENCABEZADO
                         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c3e50')),
-                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
                         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                        ('FONTSIZE', (0, 0), (-1, 0), 9),
-                        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-                        ('TOPPADDING', (0, 0), (-1, 0), 8),
+                        ('FONTSIZE', (0, 0), (-1, 0), 8),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
+                        ('TOPPADDING', (0, 0), (-1, 0), 4),
                         
-                        # Filas de datos
+                        # LÍNEA INFERIOR DEL ENCABEZADO
+                        ('LINEBELOW', (0, 0), (-1, 0), 0.5, colors.black),
+                        
+                        # DATOS
                         ('BACKGROUND', (0, 1), (-1, -1), colors.white),
                         ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-                        ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # Columna #
-                        ('ALIGN', (1, 1), (1, -1), 'CENTER'),  # Columna Guía
-                        ('ALIGN', (2, 1), (5, -1), 'LEFT'),    # Cliente, Ciudad, Estado, Dirección
+                        ('ALIGN', (0, 1), (1, -1), 'CENTER'),  # Columnas # y Guía centradas
+                        ('ALIGN', (2, 1), (-1, -1), 'LEFT'),   # Demás columnas alineadas a la izquierda
                         ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                        ('FONTSIZE', (0, 1), (5, -1), 8),      # Tamaño para todas excepto Producto
-                        ('FONTSIZE', (6, 1), (6, -1), 7),      # Producto más pequeño
-                        ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
-                        ('TOPPADDING', (0, 1), (-1, -1), 6),
-                        
-                        # Bordes
-                        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                        ('LINEBELOW', (0, 0), (-1, 0), 2, colors.HexColor('#2c3e50')),
-                        
-                        # Filas alternadas
-                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
-                        
-                        # Ajuste de altura automática para celdas con mucho texto
+                        ('FONTSIZE', (0, 1), (-1, -1), 7.5),
+                        ('BOTTOMPADDING', (0, 1), (-1, -1), 2),
+                        ('TOPPADDING', (0, 1), (-1, -1), 2),
                         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                    ]))
+                        
+                        # BORDES DELGADOS
+                        ('GRID', (0, 0), (-1, -1), 0.25, colors.grey),  # Líneas más delgadas
+                        
+                        # FILAS ALTERNADAS (solo para datos, no encabezado)
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f5f5f5')]),
+                    ])
                     
-                    # Asegurar que la tabla completa se mantenga junta
-                    elements.append(KeepTogether(guias_table))
+                    tabla.setStyle(estilo_tabla)
+                    elements.append(tabla)
                 
-                # Página de firmas
+                # PÁGINA DE FIRMAS (solo una vez al final)
                 elements.append(PageBreak())
-                elements.append(Spacer(1, 1.5*inch))
+                elements.append(Spacer(1, 3*cm))
                 
+                # Tabla de firmas más compacta
                 firma_data = [
                     ['', '', '', ''],
-                    ['_'*35, '', '', '_'*35],
+                    ['_________________________', '', '', '_________________________'],
                     ['Entregado por', '', '', 'Recibido por'],
                     ['', '', '', ''],
                     ['Nombre:', '', '', 'Nombre:'],
@@ -225,25 +297,42 @@ if uploaded_file is not None:
                     ['Hora:', '', '', 'Hora:'],
                 ]
                 
-                firma_table = Table(firma_data, colWidths=[2.8*inch, 1.2*inch, 1.2*inch, 2.8*inch])
+                firma_table = Table(
+                    firma_data, 
+                    colWidths=[4*cm, 1.5*cm, 1.5*cm, 4*cm],
+                    rowHeights=0.6*cm
+                )
+                
                 firma_table.setStyle(TableStyle([
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                     ('FONTNAME', (0, 2), (-1, 2), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, -1), 11),
+                    ('FONTNAME', (0, 4), (0, 4), 'Helvetica-Bold'),
+                    ('FONTNAME', (3, 4), (3, 4), 'Helvetica-Bold'),
+                    ('FONTNAME', (0, 6), (0, 6), 'Helvetica-Bold'),
+                    ('FONTNAME', (3, 6), (3, 6), 'Helvetica-Bold'),
+                    ('FONTNAME', (0, 8), (0, 8), 'Helvetica-Bold'),
+                    ('FONTNAME', (3, 8), (3, 8), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 10),
                 ]))
                 
                 elements.append(firma_table)
-                elements.append(Spacer(1, 0.8*inch))
+                elements.append(Spacer(1, 1.5*cm))
                 
-                nota_style = ParagraphStyle('Nota', parent=styles['Normal'], 
-                    fontSize=9, textColor=colors.HexColor('#666666'), 
-                    alignment=TA_CENTER, fontName='Helvetica-Oblique')
+                # Nota al pie
+                nota_style = ParagraphStyle(
+                    'Nota', 
+                    parent=styles['Normal'],
+                    fontSize=8,
+                    textColor=colors.HexColor('#666666'),
+                    alignment=TA_CENTER,
+                    fontName='Helvetica-Oblique'
+                )
                 elements.append(Paragraph("Documento generado automáticamente.", nota_style))
                 
-                # Generar PDF
+                # CONSTRUIR EL PDF
                 doc.build(elements)
                 
-                # Preparar para descarga
+                # Preparar archivo para descarga
                 buffer.seek(0)
                 pdf_data = buffer.getvalue()
                 
@@ -252,8 +341,9 @@ if uploaded_file is not None:
                 st.info(f"""
                 **📊 Resumen:**
                 - Total órdenes: **{total_ordenes}**
-                - Páginas: **{num_paginas + 1}** ({num_paginas} datos + 1 firmas)
+                - Páginas: **{num_paginas + 1}** ({num_paginas} de datos + 1 de firmas)
                 - Fecha: **{FECHA_MANIFIESTO}**
+                - Diseño optimizado para 18 órdenes por página
                 """)
                 
                 # Botón de descarga
@@ -273,6 +363,7 @@ if uploaded_file is not None:
     
     except Exception as e:
         st.error(f"❌ Error: {str(e)}")
+        st.exception(e)
 
 # Pie de página
 st.markdown("---")
