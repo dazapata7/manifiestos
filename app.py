@@ -14,14 +14,14 @@ from reportlab.platypus import (
     PageBreak,
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas as rl_canvas
 from xml.sax.saxutils import escape
 
 
 # -----------------------------
-# Canvas con "Página X de Y" + encabezado
+# Canvas con encabezado + "Página X de Y"
 # -----------------------------
 class HeaderCanvas(rl_canvas.Canvas):
     def __init__(self, *args, manifest_date="", total_orders=0, **kwargs):
@@ -45,28 +45,26 @@ class HeaderCanvas(rl_canvas.Canvas):
     def draw_header(self, page_num, total_pages):
         width, height = self._pagesize
 
-        # Título
         self.setFont("Helvetica-Bold", 14)
         self.drawCentredString(width / 2.0, height - 22, "MANIFIESTO DE ENTREGA")
 
-        # Subtítulo (con paginación)
         self.setFont("Helvetica", 9)
-        subtitle = f"Fecha: {self.manifest_date} | Total: {self.total_orders} órdenes | Página {page_num} de {total_pages}"
+        subtitle = (
+            f"Fecha: {self.manifest_date} | Total: {self.total_orders} órdenes | "
+            f"Página {page_num} de {total_pages}"
+        )
         self.drawCentredString(width / 2.0, height - 36, subtitle)
 
 
 def as_para(text: str, style: ParagraphStyle) -> Paragraph:
     """
-    Convierte texto a Paragraph envolviendo líneas y respetando saltos.
-    - No trunca
-    - No pone "..."
-    - Envuelve dentro de la celda
+    Convierte texto a Paragraph para:
+    - envolver en la celda (sin truncar ni "...")
+    - respetar saltos de línea
     """
     if text is None:
         text = ""
     text = str(text)
-
-    # Escapar caracteres especiales y conservar saltos de línea
     text = escape(text).replace("\n", "<br/>")
     return Paragraph(text, style)
 
@@ -81,7 +79,9 @@ with st.sidebar:
     st.header("⚙️ Configuración")
     FECHA_MANIFIESTO = datetime.now().strftime("%d/%m/%Y")
     st.info(f"📅 Fecha: **{FECHA_MANIFIESTO}**")
-    nombre_pdf = st.text_input("Nombre del PDF:", f"Manifiesto_{FECHA_MANIFIESTO.replace('/', '_')}.pdf")
+    nombre_pdf = st.text_input(
+        "Nombre del PDF:", f"Manifiesto_{FECHA_MANIFIESTO.replace('/', '_')}.pdf"
+    )
 
 uploaded_file = st.file_uploader("Sube tu archivo Excel", type=["xlsx", "xls"])
 
@@ -89,8 +89,16 @@ if uploaded_file is not None:
     try:
         df = pd.read_excel(uploaded_file)
 
-        # Columnas requeridas (ajusta si tu Excel usa otros nombres)
-        columnas_requeridas = ["Guía de Envío", "Cliente", "Ciudad", "Estado", "Calle", "Número", "Productos"]
+        # Ajusta si tus columnas se llaman distinto
+        columnas_requeridas = [
+            "Guía de Envío",
+            "Cliente",
+            "Ciudad",
+            "Estado",
+            "Calle",
+            "Número",
+            "Productos",
+        ]
         faltantes = [c for c in columnas_requeridas if c not in df.columns]
         if faltantes:
             st.error(f"❌ Columnas faltantes: {', '.join(faltantes)}")
@@ -103,18 +111,19 @@ if uploaded_file is not None:
             with st.spinner("Generando PDF..."):
                 buffer = BytesIO()
 
+                # Carta horizontal + márgenes para impresión
                 doc = SimpleDocTemplate(
                     buffer,
                     pagesize=landscape(letter),
-                    rightMargin=20,
-                    leftMargin=20,
-                    topMargin=55,     # deja espacio para encabezado dibujado por canvas
+                    leftMargin=40,
+                    rightMargin=40,
+                    topMargin=60,      # deja espacio para header del canvas
                     bottomMargin=30,
                 )
 
                 styles = getSampleStyleSheet()
 
-                # Estilo de celdas (envuelve texto)
+                # Estilo de celdas (wrap)
                 cell_style = ParagraphStyle(
                     "Cell",
                     parent=styles["Normal"],
@@ -123,32 +132,27 @@ if uploaded_file is not None:
                     leading=9,
                     spaceBefore=0,
                     spaceAfter=0,
-                    wordWrap="CJK",   # ayuda a partir strings largos
+                    wordWrap="CJK",
                 )
 
+                # Header blanco + más legible
                 header_style = ParagraphStyle(
                     "HeaderCell",
                     parent=styles["Normal"],
                     fontName="Helvetica-Bold",
-                    fontSize=9,
-                    leading=10,
+                    fontSize=10,
+                    leading=11,
                     alignment=TA_CENTER,
+                    textColor=colors.white,
                 )
 
-                # Anchos de columnas (landscape letter ~ 11")
-                col_widths = [
-                    0.40 * inch,  # #
-                    0.95 * inch,  # Guía
-                    1.70 * inch,  # Cliente
-                    1.10 * inch,  # Ciudad
-                    1.05 * inch,  # Estado
-                    2.55 * inch,  # Dirección
-                    3.10 * inch,  # Producto
-                ]
+                # Anchos responsivos según el ancho útil del documento (con márgenes)
+                available_w = doc.width
+                ratios = [0.04, 0.10, 0.17, 0.11, 0.11, 0.25, 0.22]  # suman 1.0
+                col_widths = [available_w * r for r in ratios]
 
-                # Construir tabla completa (sin paginar manualmente)
-                table_data = []
-                table_data.append(
+                # Tabla completa (se parte sola entre páginas)
+                table_data = [
                     [
                         as_para("#", header_style),
                         as_para("Guía", header_style),
@@ -158,7 +162,7 @@ if uploaded_file is not None:
                         as_para("Dirección", header_style),
                         as_para("Producto", header_style),
                     ]
-                )
+                ]
 
                 for i, row in df.iterrows():
                     guia = row.get("Guía de Envío", "")
@@ -188,7 +192,7 @@ if uploaded_file is not None:
                     table_data,
                     colWidths=col_widths,
                     repeatRows=1,
-                    splitByRow=1,  # permite partir la tabla entre páginas
+                    splitByRow=1,
                 )
 
                 tabla.setStyle(
@@ -199,8 +203,8 @@ if uploaded_file is not None:
                             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
                             ("ALIGN", (0, 0), (-1, 0), "CENTER"),
                             ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
-                            ("TOPPADDING", (0, 0), (-1, 0), 6),
-                            ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
+                            ("TOPPADDING", (0, 0), (-1, 0), 8),
+                            ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
 
                             # Body
                             ("VALIGN", (0, 1), (-1, -1), "TOP"),
@@ -217,7 +221,7 @@ if uploaded_file is not None:
                 )
 
                 elements = []
-                elements.append(Spacer(1, 0.1 * inch))
+                elements.append(Spacer(1, 0.10 * inch))
                 elements.append(tabla)
 
                 # Página de firmas
@@ -233,7 +237,10 @@ if uploaded_file is not None:
                     ["Hora:", "", "", "Hora:"],
                 ]
 
-                firma_table = Table(firma_data, colWidths=[3 * inch, 0.5 * inch, 0.5 * inch, 3 * inch])
+                firma_table = Table(
+                    firma_data,
+                    colWidths=[3 * inch, 0.5 * inch, 0.5 * inch, 3 * inch],
+                )
                 firma_table.setStyle(
                     TableStyle(
                         [
@@ -243,18 +250,31 @@ if uploaded_file is not None:
                         ]
                     )
                 )
+
                 elements.append(firma_table)
                 elements.append(Spacer(1, 0.3 * inch))
+
+                note_style = ParagraphStyle(
+                    "Note",
+                    parent=styles["Normal"],
+                    fontSize=9,
+                    alignment=TA_CENTER,
+                )
                 elements.append(
                     Paragraph(
-                        "Este documento es un manifiesto de entrega generado automáticamente. Para cualquier aclaración, contactar con el área de logística.",
-                        ParagraphStyle("Note", parent=styles["Normal"], fontSize=9, alignment=TA_CENTER),
+                        "Este documento es un manifiesto de entrega generado automáticamente. "
+                        "Para cualquier aclaración, contactar con el área de logística.",
+                        note_style,
                     )
                 )
 
-                # Build con canvas que conoce total páginas
                 def canvasmaker(*args, **kwargs):
-                    return HeaderCanvas(*args, manifest_date=FECHA_MANIFIESTO, total_orders=total_ordenes, **kwargs)
+                    return HeaderCanvas(
+                        *args,
+                        manifest_date=FECHA_MANIFIESTO,
+                        total_orders=total_ordenes,
+                        **kwargs,
+                    )
 
                 doc.build(elements, canvasmaker=canvasmaker)
 
